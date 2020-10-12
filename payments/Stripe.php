@@ -27,6 +27,7 @@ class Stripe extends BasePaymentGateway
     public function getHiddenFields()
     {
         return [
+            'payment_button' => 0,
             'stripe_payment_method' => '',
             'stripe_idempotency_key' => uniqid(),
         ];
@@ -94,6 +95,34 @@ class Stripe extends BasePaymentGateway
                 return Redirect::to($response->getRedirectUrl());
             }
 
+            $this->handlePaymentResponse($response, $order, $host, $fields);
+        }
+        catch (Exception $ex) {
+            $order->logPaymentAttempt('Payment error -> '.$ex->getMessage(), 0, $fields, []);
+            throw new ApplicationException('Sorry, there was an error processing your payment. Please try again later.');
+        }
+    }
+
+    /**
+     * Processes payment from a payment button
+     *
+     * @param array $data
+     * @param \Admin\Models\Payments_model $host
+     * @param \Admin\Models\Orders_model $order
+     *
+     * @return bool|\Illuminate\Http\RedirectResponse
+     * @throws \ApplicationException
+     */
+    public function processPaymentButton($data, $host, $order)
+    {
+        $fields = [
+            'paymentIntentReference' => Session::get('ti_payregister_stripe_intent')->id,
+        ];
+
+        $gateway = $this->createGateway();
+        $response = $gateway->fetchPaymentIntent($fields)->send();
+        
+        try {
             $this->handlePaymentResponse($response, $order, $host, $fields);
         }
         catch (Exception $ex) {
@@ -310,6 +339,23 @@ class Stripe extends BasePaymentGateway
         $gateway->setApiKey($this->getSecretKey());
 
         return $gateway;
+    }
+
+    public function createIntent($order)
+    {
+        $intent = $this->createGateway()->create([
+            'amount' => $order->order_total,
+            'currency' => currency()->getUserCurrency(),
+        ])->send();
+
+        $data = (object)[
+            'id' => $intent->getPaymentIntentReference(),
+            'secret' => $intent->getPaymentIntentClientSecret(),
+        ];
+
+        Session::put('ti_payregister_stripe_intent', $data);
+
+        return $data;
     }
 
     protected function getPaymentFormFields($order, $data = [])
